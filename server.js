@@ -1,79 +1,66 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-const path = require("path");
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
 
+// Configuración de Socket.io optimizada para estabilidad en Render[cite: 1]
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+    cors: { origin: "*" },
+    pingTimeout: 60000,
+    pingInterval: 25000
 });
 
-app.use(express.static(path.join(__dirname, "public")));
+// Servir archivos estáticos desde la raíz del proyecto[cite: 1]
+app.use(express.static(__dirname));
 
 let drawingHistory = [];
-let savedGallery = [];
-let activeUsers = {};
+let users = {};
 
-io.on("connection", (socket) => {
-  // Enviar historial previo al cliente al conectar
-  socket.emit("initHistory", drawingHistory);
-  socket.emit("updateGallery", savedGallery);
+io.on('connection', (socket) => {
+    console.log(`Usuario conectado: ${socket.id}`);
 
-  socket.on("setName", (name) => {
-    activeUsers[socket.id] = name;
-    io.emit("users", Object.values(activeUsers));
-  });
+    socket.on('setName', (name) => {
+        users[socket.id] = name;
+        socket.emit('initHistory', drawingHistory);
+        io.emit('users', Object.values(users));
+    });
 
-  // Escuchar eventos de trazo suave (resuelve las líneas geométricas)
-  socket.on("drawStart", (data) => {
-    drawingHistory.push({ type: "start", ...data });
-    socket.broadcast.emit("drawStart", data);
+    socket.on('draw', (data) => {
+        drawingHistory.push(data);
+        socket.broadcast.emit('draw', data);
+        if (users[socket.id]) {
+            socket.broadcast.emit('userDrawing', users[socket.id]);
+        }
+    });
 
-    const userName = activeUsers[socket.id] || "Alguien";
-    socket.broadcast.emit("userDrawing", userName);
-  });
+    socket.on('fill', (data) => {
+        drawingHistory.push(data);
+        socket.broadcast.emit('fill', data);
+        if (users[socket.id]) {
+            socket.broadcast.emit('userDrawing', users[socket.id]);
+        }
+    });
 
-  socket.on("drawSmooth", (data) => {
-    drawingHistory.push({ type: "smooth", ...data });
-    socket.broadcast.emit("drawSmooth", data);
+    socket.on('cursorMove', (data) => {
+        socket.broadcast.emit('cursorMove', { ...data, id: socket.id });
+    });
 
-    // Añadido también aquí para que el aviso de dibujo permanezca fluido mientras arrastran el trazo
-    const userName = activeUsers[socket.id] || "Alguien";
-    socket.broadcast.emit("userDrawing", userName);
-  });
+    socket.on('clear', () => {
+        drawingHistory = [];
+        io.emit('clear');
+    });
 
-  socket.on("fill", (data) => {
-    drawingHistory.push({ type: "fill", ...data });
-    socket.broadcast.emit("fill", data);
-
-    const userName = activeUsers[socket.id] || "Alguien";
-    socket.broadcast.emit("userDrawing", userName);
-  });
-
-  // Guardar en la galería y limpiar
-  socket.on("saveToGallery", (dataURL) => {
-    savedGallery.unshift(dataURL);
-    if (savedGallery.length > 20) savedGallery.pop();
-    io.emit("updateGallery", savedGallery);
-  });
-
-  socket.on("clear", () => {
-    drawingHistory = [];
-    io.emit("clear");
-  });
-
-  socket.on("disconnect", () => {
-    delete activeUsers[socket.id];
-    io.emit("users", Object.values(activeUsers));
-  });
+    socket.on('disconnect', () => {
+        console.log(`Usuario desconectado: ${socket.id}`);
+        delete users[socket.id];
+        io.emit('users', Object.values(users));
+        io.emit('removeCursor', socket.id);
+    });
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Servidor escuchando en el puerto ${PORT}`);
+    console.log(`Servidor corriendo en puerto ${PORT}`);
 });
